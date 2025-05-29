@@ -19,7 +19,7 @@ Válasz: {{ "locations": ["Budapest", "Érd"], "type": "ház", "size": 100 }}
 Kérdés: "{question}"
 Válasz:"""
 
-    response = openai.ChatCompletion.create(
+    response = openai.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}],
         temperature=0
