@@ -43,19 +43,82 @@ FUTES_TIPUSOK = {
     "központi": ["kozponti-futes", "hazkozponti", "hazkozponti-futes-egyedi-meressel"]
 }
 
+# 🔄 Fallback értelmezés egyszerű szövegkezeléssel
+def create_fallback_result(question):
+    """Egyszerű kulcsszó alapú értelmezés, ha az AI nem működik"""
+    result = {
+        "locations": [],
+        "type": None,
+        "size_min": None,
+        "size_max": None,
+        "rooms_min": None,
+        "rooms_max": None,
+        "price_min": None,
+        "price_max": None,
+        "condition": None,
+        "heating": None
+    }
+    
+    question_lower = question.lower()
+    
+    # Városok keresése
+    varosok = ["budapest", "debrecen", "szeged", "pécs", "győr", "nyíregyháza", "kecskemét", "székesfehérvár", "miskolc", "sopron", "eger", "veszprém"]
+    for varos in varosok:
+        if varos in question_lower:
+            result["locations"].append(varos.capitalize())
+    
+    # Kerületek keresése (Budapest)
+    import re
+    kerulet_match = re.search(r'budapest.*?(\d+).*?kerület', question_lower)
+    if kerulet_match:
+        kerulet_szam = kerulet_match.group(1)
+        result["locations"] = [f"Budapest {kerulet_szam}. kerület"]
+    
+    # Ingatlan típus
+    if any(word in question_lower for word in ["családi ház", "családiház"]):
+        result["type"] = "családi ház"
+    elif "ikerház" in question_lower:
+        result["type"] = "ikerház"
+    elif "sorház" in question_lower:
+        result["type"] = "sorház"
+    elif "lakás" in question_lower:
+        result["type"] = "lakás"
+    elif "ház" in question_lower:
+        result["type"] = "ház"
+    
+    # Méret keresése
+    size_match = re.search(r'(\d+)[-–](\d+).*?m2|(\d+)[-–](\d+).*?négyzetméter', question_lower)
+    if size_match:
+        if size_match.group(1) and size_match.group(2):
+            result["size_min"] = int(size_match.group(1))
+            result["size_max"] = int(size_match.group(2))
+        elif size_match.group(3) and size_match.group(4):
+            result["size_min"] = int(size_match.group(3))
+            result["size_max"] = int(size_match.group(4))
+    
+    # Ár keresése (millió forint)
+    price_match = re.search(r'(\d+).*?millió', question_lower)
+    if price_match:
+        result["price_max"] = int(price_match.group(1))
+    
+    return result
+
 # 📌 OpenAI alapú értelmezés (bővített)
 def interpret_input(question: str):
-    prompt = f"""A felhasználó magyarországi ingatlanhirdetést keres. Elemezd ki a következő információkat:
+    prompt = f"""A felhasználó magyarországi ingatlanhirdetést keres. Elemezd ki a következő információkat és válaszolj CSAK egy valid JSON objektummal:
 
-1. HELYSZÍNEK: Magyar városok, kerületek (pl. Budapest III. kerület, Debrecen, Pécs)
-2. INGATLAN TÍPUS: lakás, ház, családi ház, ikerház, sorház, villa, telek, garázs
-3. ALAPTERÜLET: négyzetméter (m2)
-4. SZOBASZÁM: hány szobás
-5. ÁR: forint összeg (millió Ft-ban)
-6. ÁLLAPOT: új, újszerű, felújított, jó állapotú, átlagos
-7. FŰTÉS: gáz, távfűtés, elektromos, központi
+FONTOS: Válaszodban CSAK a JSON objektum legyen, semmi más szöveg!
 
-Válaszolj JSON formátumban:
+Elemezendő információk:
+- HELYSZÍNEK: Magyar városok, kerületek
+- INGATLAN TÍPUS: lakás, ház, családi ház, ikerház, sorház, villa, telek, garázs  
+- ALAPTERÜLET: m2-ben
+- SZOBASZÁM: szám
+- ÁR: millió forintban
+- ÁLLAPOT: új, újszerű, felújított, jó állapotú, átlagos
+- FŰTÉS: gáz, távfűtés, elektromos, központi
+
+JSON séma:
 {{
   "locations": ["város1", "város2"],
   "type": "ingatlan típus",
@@ -69,12 +132,9 @@ Válaszolj JSON formátumban:
   "heating": "fűtés típus" vagy null
 }}
 
-Példa:
-"Budapesten és Debrecenben keresek egy 80-120 m2-es, 2-3 szobás családi házat maximum 50 millió forintért"
-Válasz: {{"locations": ["Budapest", "Debrecen"], "type": "családi ház", "size_min": 80, "size_max": 120, "rooms_min": 2, "rooms_max": 3, "price_min": null, "price_max": 50, "condition": null, "heating": null}}
-
 Kérdés: "{question}"
-Válasz:"""
+
+Válasz (CSAK JSON):"""
     
     try:
         response = openai.chat.completions.create(
@@ -84,12 +144,28 @@ Válasz:"""
         )
         content = response.choices[0].message.content.strip()
         
-        import ast
-        result = ast.literal_eval(content)
-        return result
+        # JSON parsing javítással
+        import json
+        import re
+        
+        # Csak a JSON részt keressük ki a válaszból
+        json_match = re.search(r'\{.*\}', content, re.DOTALL)
+        if json_match:
+            json_str = json_match.group()
+            result = json.loads(json_str)
+            return result
+        else:
+            # Fallback: alapértelmezett válasz
+            st.warning("⚠️ Nem sikerült teljesen értelmezni, próbálom alapértelmezett módszerrel...")
+            return create_fallback_result(question)
+            
+    except json.JSONDecodeError as e:
+        st.error(f"❌ JSON parsing hiba: {str(e)}")
+        st.write("**OpenAI válasz:**", content)
+        return create_fallback_result(question)
     except Exception as e:
         st.error(f"❌ Hiba az értelmezés során: {str(e)}")
-        return None
+        return create_fallback_result(question)
 
 # 🔗 Zenga.hu URL építő
 def build_zenga_url(data):
